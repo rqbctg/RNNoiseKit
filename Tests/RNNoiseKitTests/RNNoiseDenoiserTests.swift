@@ -35,6 +35,38 @@ final class RNNoiseDenoiserTests: XCTestCase {
         XCTAssertLessThan(outEnergy, inEnergy * 0.1)
     }
 
+    func testZeroStrengthIsInputDelayedByLatency() throws {
+        let denoiser = try RNNoiseDenoiser(
+            model: try RNNoiseModel.bundled()
+        )
+        var rng = SplitMix64(seed: 7)
+        let input = (0..<(frameSize * 6)).map { _ in
+            0.1 * rng.nextSignedUnit()
+        }
+        var output = input
+        for start in stride(
+            from: 0, to: output.count, by: frameSize
+        ) {
+            output.withUnsafeMutableBufferPointer { all in
+                let frame = UnsafeMutableBufferPointer(
+                    rebasing: all[start..<start + frameSize]
+                )
+                denoiser.process(frame, strength: 0)
+            }
+        }
+        let latency = RNNoiseDenoiser.latency
+        for i in latency..<output.count {
+            XCTAssertEqual(output[i], input[i - latency])
+        }
+    }
+
+    func testHalfStrengthRemovesLessNoise() throws {
+        let full = try noiseEnergyRatio(strength: 1)
+        let half = try noiseEnergyRatio(strength: 0.5)
+        XCTAssertLessThan(full, half)
+        XCTAssertLessThan(half, 1)
+    }
+
     func testEmptyWeightsThrow() {
         XCTAssertThrowsError(
             try RNNoiseModel(weights: Data())
@@ -53,6 +85,33 @@ final class RNNoiseDenoiserTests: XCTestCase {
         XCTAssertThrowsError(
             try RNNoiseDenoiser(model: model)
         )
+    }
+
+    /// Output over input energy for white noise, after
+    /// warm-up.
+    private func noiseEnergyRatio(
+        strength: Float
+    ) throws -> Float {
+        let denoiser = try RNNoiseDenoiser(
+            model: try RNNoiseModel.bundled()
+        )
+        var rng = SplitMix64(seed: 42)
+        var inEnergy: Float = 0
+        var outEnergy: Float = 0
+        var frame = [Float](repeating: 0, count: frameSize)
+        for index in 0..<200 {
+            for i in frame.indices {
+                frame[i] = 0.1 * rng.nextSignedUnit()
+            }
+            let input = energy(frame)
+            frame.withUnsafeMutableBufferPointer {
+                denoiser.process($0, strength: strength)
+            }
+            guard index >= 50 else { continue }
+            inEnergy += input
+            outEnergy += energy(frame)
+        }
+        return outEnergy / inEnergy
     }
 
     private func energy(_ samples: [Float]) -> Float {

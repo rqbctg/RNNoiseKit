@@ -21,7 +21,7 @@ Or in `Package.swift`:
 dependencies: [
     .package(
         url: "https://github.com/rqbctg/RNNoiseKit",
-        from: "1.0.0"
+        from: "1.1.0"
     ),
 ],
 targets: [
@@ -44,16 +44,25 @@ var frame = [Float](repeating: 0, count: RNNoiseDenoiser.frameSize)
 let voiceProbability = frame.withUnsafeMutableBufferPointer {
     denoiser.process($0)
 }
+
+// Softer suppression: blend in 40% of the original voice.
+frame.withUnsafeMutableBufferPointer {
+    denoiser.process($0, strength: 0.6)
+}
 ```
 
-- `process(_:)` does not allocate or lock, so it is safe to call from
+- `process(_:strength:)` does not allocate or lock, so it is safe to call from
   a real-time audio render callback.
 - Use one `RNNoiseDenoiser` per stream, from one thread. Feed frames in
   order: it keeps state between frames.
-- Output is delayed by one frame (10 ms).
+- Output is delayed by `RNNoiseDenoiser.latency` samples (960, or
+  20 ms), measured by cross-correlating input and output.
+- `strength` (0–1, default 1) blends the denoised signal with the
+  time-aligned original. Lower values remove less noise but keep the
+  voice more natural, which helps with singing.
 - Audio at other sample rates must be resampled to 48 kHz first.
 - Host buffers are rarely multiples of 480 samples. Collect samples
-  into 480-sample frames before calling `process(_:)`.
+  into 480-sample frames before calling `process(_:strength:)`.
 
 ## How the model is bundled
 
